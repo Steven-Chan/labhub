@@ -4,12 +4,11 @@ use crate::commands;
 use crate::config;
 use crate::errors::{GitError, RequestErrorResult};
 
-use git2::build::RepoBuilder;
+use git2::build::{RepoBuilder, CheckoutBuilder};
 use git2::{FetchOptions, PushOptions, RemoteCallbacks, Repository};
+use git2::{MergeOptions, Signature, ResetType};
 use log::{debug, error, info, warn};
-use std::collections::HashMap;
 use std::path::Path;
-use std::sync::Mutex;
 use std::thread;
 use tempfile::{tempdir, TempDir};
 
@@ -20,14 +19,6 @@ struct RepoData {
     repo: Repository,
     #[allow(dead_code)]
     dir: TempDir,
-}
-
-lazy_static! {
-    static ref REPOS: Mutex<HashMap<String, RepoData>> = {
-        #[allow(unused_mut)]
-        let mut m: HashMap<String, RepoData> = HashMap::new();
-        Mutex::new(m)
-    };
 }
 
 fn get_gitlab_repo_name(github_repo_full_name: &str) -> String {
@@ -87,7 +78,10 @@ pub struct PrHandle {
     head_full_name: String,
     github_remote: String,
     gitlab_remote: String,
+    base_gitref: String,
     gitref: String,
+    base_sha: String,
+    head_sha: String,
     github_clone_url: String,
     pr_number: i64,
 }
@@ -95,12 +89,36 @@ pub struct PrHandle {
 impl PrHandle {
     fn new(pr: &github::PullRequest) -> Result<PrHandle, std::option::NoneError> {
         let pr_handle = PrHandle {
+            base_gitref: pr
+                .pull_request
+                .as_ref()?
+                .base
+                .as_ref()?
+                .ref_key
+                .as_ref()?
+                .clone(),
             gitref: pr
                 .pull_request
                 .as_ref()?
                 .head
                 .as_ref()?
                 .ref_key
+                .as_ref()?
+                .clone(),
+            base_sha: pr
+                .pull_request
+                .as_ref()?
+                .base
+                .as_ref()?
+                .sha
+                .as_ref()?
+                .clone(),
+            head_sha: pr
+                .pull_request
+                .as_ref()?
+                .head
+                .as_ref()?
+                .sha
                 .as_ref()?
                 .clone(),
             pr_number: pr.pull_request.as_ref()?.number?,
@@ -167,24 +185,81 @@ impl RepositoryExt for Repository {
         let mut fetch_options = FetchOptions::new();
         fetch_options.remote_callbacks(get_remote_callbacks(&config::CONFIG.github));
 
-        remote.fetch(&[&pr_handle.gitref], Some(&mut fetch_options), None)?;
+        remote.fetch(
+            &[&pr_handle.base_gitref, &pr_handle.gitref],
+            Some(&mut fetch_options),
+            None
+        )?;
 
         info!("Successfully fetched remote");
         Ok(())
     }
 
     fn create_ref_for_pr(&self, pr_handle: &PrHandle) -> Result<(), GitError> {
-        let github_ref = format!(
+        info!(
+            "Merging PR head={}:{} base={}:{}",
+            pr_handle.head_full_name, pr_handle.gitref,
+            pr_handle.base_full_name, pr_handle.base_gitref
+        );
+
+        let base_refname = format!(
+            "refs/remotes/{}/{}",
+            pr_handle.github_remote, pr_handle.base_gitref
+        );
+
+        let base_commit_id = self.refname_to_id(&base_refname)?;
+        let base_commit = self.find_commit(base_commit_id)?;
+
+        let mut checkout_builder = CheckoutBuilder::new();
+        checkout_builder.force();
+        self.reset(base_commit.as_object(), ResetType::Hard, Some(&mut checkout_builder))?;
+
+        let head_ref = self.find_reference(&format!(
             "refs/remotes/{}/{}",
             pr_handle.github_remote, pr_handle.gitref
-        );
+        ))?;
+        let annotated_head_commit = self.reference_to_annotated_commit(&head_ref)?;
+        let head_commit_id = annotated_head_commit.id();
+        let head_commit = self.find_commit(head_commit_id)?;
+
+        let mut merge_options = MergeOptions::new();
+        merge_options.fail_on_conflict(true);
+
+        info!("Creating merge");
+
+        self.merge(
+            &[&annotated_head_commit],
+            Some(&mut merge_options),
+            None
+        )?;
+
+        let signature = Signature::now("oursky-ci", "oursky-ci@oursky.com")?;
+
         let gitlab_ref = format!(
-            "refs/heads/pr-{}/{}/{}",
-            pr_handle.pr_number, pr_handle.head_full_name, pr_handle.gitref
+            "refs/heads/{}/{}/pr-{}/{}/{}",
+            pr_handle.base_full_name,
+            pr_handle.base_gitref,
+            pr_handle.pr_number,
+            pr_handle.head_full_name,
+            pr_handle.gitref
         );
-        let id = self.refname_to_id(&github_ref)?;
-        debug!("Creating ref {} from {}, id={}", gitlab_ref, github_ref, id);
-        self.reference(&gitlab_ref, id, true, "new ref")?;
+
+        info!("Creating merge commit");
+
+        let mut index = self.index()?;
+        let tree_id = index.write_tree()?;
+        let tree = self.find_tree(tree_id)?;
+
+        self.commit(
+            Some(&gitlab_ref),
+            &signature,
+            &signature,
+            "Merge commit",
+            &tree,
+            &[&base_commit, &head_commit]
+        )?;
+
+        info!("Successfully merged");
         Ok(())
     }
 
@@ -201,10 +276,14 @@ impl RepositoryExt for Repository {
         push_options.remote_callbacks(get_remote_callbacks(&config::CONFIG.gitlab));
 
         let refspec = format!(
-            "+refs/heads/pr-{}/{}/{}:refs/heads/pr-{}/{}/{}",
+            "+refs/heads/{}/{}/pr-{}/{}/{}:refs/heads/{}/{}/pr-{}/{}/{}",
+            pr_handle.base_full_name,
+            pr_handle.base_gitref,
             pr_handle.pr_number,
             pr_handle.head_full_name,
             pr_handle.gitref,
+            pr_handle.base_full_name,
+            pr_handle.base_gitref,
             pr_handle.pr_number,
             pr_handle.head_full_name,
             pr_handle.gitref
@@ -228,8 +307,12 @@ impl RepositoryExt for Repository {
         push_options.remote_callbacks(get_remote_callbacks(&config::CONFIG.gitlab));
 
         let refspec = format!(
-            ":refs/heads/pr-{}/{}/{}",
-            pr_handle.pr_number, pr_handle.head_full_name, pr_handle.gitref,
+            ":refs/heads/{}/{}/pr-{}/{}/{}",
+            pr_handle.base_full_name,
+            pr_handle.base_gitref,
+            pr_handle.pr_number,
+            pr_handle.head_full_name,
+            pr_handle.gitref,
         );
         gitremote.push(&[&refspec], Some(&mut push_options))?;
 
@@ -282,27 +365,21 @@ fn handle_pr_closed_with_repo(
 fn handle_pr_closed(pr: &github::PullRequest) -> Result<String, GitError> {
     info!("Handling closed PR");
     let url = pr.repository.as_ref()?.ssh_url.as_ref()?;
-    let mut repos = REPOS.lock();
-    let repo_data = repos
-        .as_mut()
-        .unwrap()
-        .entry(url.clone())
-        .or_insert(clone_repo(url)?);
+    let mut repo_data = clone_repo(url)?;
 
-    handle_pr_closed_with_repo(&mut repo_data.repo, pr)
+    let result = handle_pr_closed_with_repo(&mut repo_data.repo, pr);
+    repo_data.dir.close()?;
+    result
 }
 
 fn handle_pr_updated(pr: &github::PullRequest) -> Result<String, GitError> {
     info!("Handling open PR");
     let url = pr.repository.as_ref()?.ssh_url.as_ref()?;
-    let mut repos = REPOS.lock();
-    let repo_data = repos
-        .as_mut()
-        .unwrap()
-        .entry(url.clone())
-        .or_insert(clone_repo(url)?);
+    let mut repo_data = clone_repo(url)?;
 
-    handle_pr_updated_with_repo(&mut repo_data.repo, pr)
+    let result = handle_pr_updated_with_repo(&mut repo_data.repo, pr);
+    repo_data.dir.close()?;
+    result
 }
 
 fn handle_pr_updated_with_repo(
@@ -337,18 +414,20 @@ impl github::PullRequest {
 
 fn handle_pr(pr: github::PullRequest) -> Result<(), RequestErrorResult> {
     if pr.is_fork()? {
-        info!("PR is a fork");
-        let result = match pr.action.as_ref()?.as_ref() {
-            "closed" => handle_pr_closed(&pr),
-            _ => handle_pr_updated(&pr),
-        };
-        match result {
-            Ok(ok) => info!("Handled PR: {}", ok),
-            Err(err) => error!("Caught error handling PR: {:?}", err),
-        }
+        info!("Handling PR from a fork");
     } else {
-        info!("Skipping PR because it's not a fork, cya 👋");
+        info!("Handling PR from the same repo");
     }
+
+    let result = match pr.action.as_ref()?.as_ref() {
+        "closed" => handle_pr_closed(&pr),
+        _ => handle_pr_updated(&pr),
+    };
+    match result {
+        Ok(ok) => info!("Handled PR: {}", ok),
+        Err(err) => error!("Caught error handling PR: {:?}", err),
+    }
+
     Ok(())
 }
 
@@ -505,19 +584,24 @@ fn handle_ic(ic: github::IssueComment) {
 pub fn handle_event_body(event_type: &str, body: &str) -> Result<String, RequestErrorResult> {
     match event_type {
         "push" => {
-            let push: github::Push = serde_json::from_str(body)?;
-            info!("Push ref={}", push.ref_key.as_ref()?);
-            Ok(String::from("Push received 😘"))
+            if config::feature_enabled(&config::Feature::Push) {
+                let push: github::Push = serde_json::from_str(body)?;
+                info!("Push ref={}", push.ref_key.as_ref()?);
+                // thread::spawn(move || handle_push(push));
+            } else {
+                info!("Push feature not enabled. Skipping event.");
+            }
+            Ok(String::from("Push received"))
         }
         "pull_request" => {
-            if config::feature_enabled(&config::Feature::ExternalPr) {
+            if config::feature_enabled(&config::Feature::PullRequest) {
                 let pr: github::PullRequest = serde_json::from_str(body)?;
                 info!("PullRequest action={}", pr.action.as_ref()?);
                 thread::spawn(move || handle_pr(pr));
             } else {
-                info!("ExternalPr feature not enabled. Skipping event.");
+                info!("Pr feature not enabled. Skipping event.");
             }
-            Ok(String::from("Thanks buddy bro 😍"))
+            Ok(String::from("Pull Request received"))
         }
         "issue_comment" => {
             if config::feature_enabled(&config::Feature::Commands) {
