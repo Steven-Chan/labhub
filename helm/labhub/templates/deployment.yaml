@@ -26,6 +26,8 @@ spec:
           env:
             - name: LABHUB_TOML
               value: "/etc/labhub/LabHub.toml"
+            - name: LABHUB_REPO_MAPPING_TOML
+              value: "/etc/labhub/LabHub-repo-mapping.toml"
             {{- with .Values.envVars }}
               {{- toYaml . | nindent 12 }}
             {{- end }}

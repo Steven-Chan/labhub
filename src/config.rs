@@ -12,7 +12,8 @@ use yansi::Paint;
 #[derive(Debug, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum Feature {
-    ExternalPr,
+    Push,
+    PullRequest,
     Commands,
 }
 
@@ -20,9 +21,13 @@ pub enum Feature {
 pub struct Config {
     pub github: Site,
     pub gitlab: Site,
-    pub mappings: Vec<Mapping>,
     pub features: Vec<Feature>,
     pub commands: Commands,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RepoMapping {
+    pub mappings: Vec<Mapping>,
 }
 
 pub fn feature_enabled(feature: &Feature) -> bool {
@@ -71,11 +76,23 @@ fn get_labhub_toml_path() -> String {
     env::var("LABHUB_TOML").unwrap_or_else(|_| "LabHub.toml".to_string())
 }
 
+fn get_repo_mapping_toml_path() -> String {
+    env::var("LABHUB_REPO_MAPPING_TOML").unwrap_or_else(|_| "LabHub-repo-mapping.toml".to_string())
+}
+
 lazy_static! {
     pub static ref CONFIG: Config = {
         let labhub_toml_path = get_labhub_toml_path();
         let config: Config = toml::from_str(&read_file_to_string(&labhub_toml_path)).unwrap();
         config
+    };
+}
+
+lazy_static! {
+    pub static ref REPO_MAPPING: RepoMapping = {
+        let repo_mapping_toml_path = get_repo_mapping_toml_path();
+        let repo_mapping: RepoMapping = toml::from_str(&read_file_to_string(&repo_mapping_toml_path)).unwrap();
+        repo_mapping
     };
 }
 
@@ -94,7 +111,13 @@ pub fn load_config() {
     );
     info!("CONFIG => {:#?}", Paint::red(&*CONFIG));
 
-    for mapping in CONFIG.mappings.iter() {
+    info!(
+        "Loaded LabHub repo mapping values from {}",
+        get_repo_mapping_toml_path()
+    );
+    info!("REPO_MAPPING => {:#?}", Paint::red(&*REPO_MAPPING));
+
+    for mapping in REPO_MAPPING.mappings.iter() {
         let mut hub_to_lab_lock = HUB_TO_LAB.lock();
         let hub_to_lab = hub_to_lab_lock.as_mut().unwrap();
         hub_to_lab.insert(mapping.github_repo.clone(), mapping.gitlab_repo.clone());

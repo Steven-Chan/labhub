@@ -26,11 +26,3 @@ username = "ci-user"
 ssh_key = "/etc/ssh-keys/labhub-key.ecdsa"
 api_token = "token"
 hostname = "gitlab.com"
-
-# List of mappings to/from GitHub & GitLab
-[[mappings]]
-github_repo = "brndnmtthws/labhub"
-gitlab_repo = "brndnmtthws-oss/labhub"
-[[mappings]]
-github_repo = "brndnmtthws/conky"
-gitlab_repo = "brndnmtthws-oss/conky"
