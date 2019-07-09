@@ -2,6 +2,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: {{ template "labhub.fullname" . }}
+  namespace: {{ .Values.namespace }}
   labels:
     app.kubernetes.io/managed-by: {{ .Release.Service }}
     app.kubernetes.io/instance: {{ .Release.Name }}
@@ -9,3 +10,4 @@ metadata:
     app.kubernetes.io/name: {{ template "labhub.name" . }}
 data:
   LabHub.toml: {{ .Values.labhub_toml | quote }}
+  LabHub-repo-mapping.toml: {{ .Values.repo_mapping_toml | quote }}

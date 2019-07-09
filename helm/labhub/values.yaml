@@ -4,6 +4,8 @@
 
 replicaCount: 1
 
+namespace: default
+
 image:
   repository: brndnmtthws/labhub
   tag: latest
@@ -49,6 +51,8 @@ tolerations: []
 affinity: {}
 
 envVars: {}
+
+deploymentStrategy: {}
 
 labhub_toml: |
   # List of enabled features. At the moment there's only one, so this parameter
