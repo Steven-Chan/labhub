@@ -62,7 +62,7 @@ spec:
       volumes:
         - name: labhub-ssh-keys
           secret:
-            secretName: labhub-ssh-keys
+            secretName: ssh-keys
         - name: labhub
           configMap:
             name: {{ template "labhub.fullname" . }}
