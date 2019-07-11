@@ -23,6 +23,7 @@ pub struct Config {
     pub gitlab: Site,
     pub features: Vec<Feature>,
     pub commands: Commands,
+    pub pr_branch_prefix: String,
 }
 
 #[derive(Debug, Deserialize)]
