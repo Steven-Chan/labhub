@@ -84,6 +84,28 @@ pub fn retry_pipeline(
     }
 }
 
+pub fn pull_repo_mirror(
+    client: &reqwest::Client,
+    project: &str,
+) -> Result<(), GitError> {
+    let res = client
+        .post(&format!(
+            "{}/mirror/pull",
+            make_api_url(project),
+        ))
+        .headers(headers(&config::CONFIG.gitlab.api_token))
+        .send()?;
+
+    match res.status() {
+        reqwest::StatusCode::OK => Ok(()),
+        _ => {
+            let msg = format!("Error triggering pull repo mirror: {:#?}", res);
+            error!("{}", msg);
+            Err(GitError { message: msg })
+        }
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;

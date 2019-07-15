@@ -435,6 +435,14 @@ fn handle_pr(pr: github::PullRequest) -> Result<(), RequestErrorResult> {
     Ok(())
 }
 
+fn handle_push(push: github::Push) -> Result<(), GitError> {
+    let client = reqwest::Client::new();
+    let repo_full_name = push.repository.as_ref()?.full_name.as_ref()?;
+    let project = get_gitlab_repo_name(&repo_full_name);
+    gitlab_client::pull_repo_mirror(&client, &project)?;
+    Ok(())
+}
+
 fn write_issue_comment(
     client: &reqwest::Client,
     ic: &github::IssueComment,
@@ -591,7 +599,7 @@ pub fn handle_event_body(event_type: &str, body: &str) -> Result<String, Request
             if config::feature_enabled(&config::Feature::Push) {
                 let push: github::Push = serde_json::from_str(body)?;
                 info!("Push ref={}", push.ref_key.as_ref()?);
-                // thread::spawn(move || handle_push(push));
+                thread::spawn(move || handle_push(push));
             } else {
                 info!("Push feature not enabled. Skipping event.");
             }
