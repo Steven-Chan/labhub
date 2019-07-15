@@ -9,7 +9,6 @@ use git2::{FetchOptions, PushOptions, RemoteCallbacks, Repository};
 use git2::{MergeOptions, Signature, ResetType};
 use log::{debug, error, info, warn};
 use std::path::Path;
-use std::thread;
 use tempfile::{tempdir, TempDir};
 
 #[cfg(test)]
@@ -435,11 +434,15 @@ fn handle_pr(pr: github::PullRequest) -> Result<(), RequestErrorResult> {
     Ok(())
 }
 
-fn handle_push(push: github::Push) -> Result<(), GitError> {
+fn handle_push(push: github::Push) -> Result<(), RequestErrorResult> {
     let client = reqwest::Client::new();
     let repo_full_name = push.repository.as_ref()?.full_name.as_ref()?;
     let project = get_gitlab_repo_name(&repo_full_name);
-    gitlab_client::pull_repo_mirror(&client, &project)?;
+    let result = gitlab_client::pull_repo_mirror(&client, &project);
+    match result {
+        Ok(()) => info!("Handled Push"),
+        Err(err) => error!("Caught error handling Push: {:?}", err),
+    }
     Ok(())
 }
 
@@ -599,7 +602,7 @@ pub fn handle_event_body(event_type: &str, body: &str) -> Result<String, Request
             if config::feature_enabled(&config::Feature::Push) {
                 let push: github::Push = serde_json::from_str(body)?;
                 info!("Push ref={}", push.ref_key.as_ref()?);
-                thread::spawn(move || handle_push(push));
+                handle_push(push)?;
             } else {
                 info!("Push feature not enabled. Skipping event.");
             }
@@ -609,7 +612,7 @@ pub fn handle_event_body(event_type: &str, body: &str) -> Result<String, Request
             if config::feature_enabled(&config::Feature::PullRequest) {
                 let pr: github::PullRequest = serde_json::from_str(body)?;
                 info!("PullRequest action={}", pr.action.as_ref()?);
-                thread::spawn(move || handle_pr(pr));
+                handle_pr(pr)?;
             } else {
                 info!("Pr feature not enabled. Skipping event.");
             }
@@ -623,7 +626,7 @@ pub fn handle_event_body(event_type: &str, body: &str) -> Result<String, Request
                     ic.action.as_ref()?,
                     ic.issue.as_ref()?.user.as_ref()?.login.as_ref()?
                 );
-                thread::spawn(move || handle_ic(ic));
+                handle_ic(ic);
             } else {
                 info!("Commands feature not enabled. Skipping event.");
             }
