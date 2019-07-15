@@ -414,7 +414,7 @@ pub struct PullRequestPullRequest {
     pub closed_at: Option<serde_json::value::Value>,
     pub merged_at: Option<String>,
     pub merge_commit_sha: Option<String>,
-    pub assignee: Option<String>,
+    pub assignee: Option<RepoPrAssignee>,
     pub milestone: Option<PullRequestPullRequestMilestone>,
     pub commits_url: Option<String>,
     pub review_comments_url: Option<String>,
