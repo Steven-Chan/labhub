@@ -424,7 +424,8 @@ fn handle_pr(pr: github::PullRequest) -> Result<(), RequestErrorResult> {
 
     let result = match pr.action.as_ref()?.as_ref() {
         "closed" => handle_pr_closed(&pr),
-        _ => handle_pr_updated(&pr),
+        "opened" | "reopened" | "synchronize" => handle_pr_updated(&pr),
+        action => Ok(format!("skip for action {}", action)),
     };
     match result {
         Ok(ok) => info!("Handled PR: {}", ok),
