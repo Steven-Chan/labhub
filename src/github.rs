@@ -235,13 +235,10 @@ impl RepositoryExt for Repository {
         let signature = Signature::now("oursky-ci", "oursky-ci@oursky.com")?;
 
         let gitlab_ref = format!(
-            "refs/heads/{}{}/{}/pr-{}/{}/{}",
+            "refs/heads/{}{}/pr-{}",
             config::CONFIG.pr_branch_prefix,
             pr_handle.base_full_name,
-            pr_handle.base_gitref,
-            pr_handle.pr_number,
-            pr_handle.head_full_name,
-            pr_handle.gitref
+            pr_handle.pr_number
         );
 
         info!("Creating merge commit");
@@ -276,19 +273,13 @@ impl RepositoryExt for Repository {
         push_options.remote_callbacks(get_remote_callbacks(&config::CONFIG.gitlab));
 
         let refspec = format!(
-            "+refs/heads/{}{}/{}/pr-{}/{}/{}:refs/heads/{}{}/{}/pr-{}/{}/{}",
+            "+refs/heads/{}{}/pr-{}:refs/heads/{}{}/pr-{}",
             config::CONFIG.pr_branch_prefix,
             pr_handle.base_full_name,
-            pr_handle.base_gitref,
             pr_handle.pr_number,
-            pr_handle.head_full_name,
-            pr_handle.gitref,
             config::CONFIG.pr_branch_prefix,
             pr_handle.base_full_name,
-            pr_handle.base_gitref,
             pr_handle.pr_number,
-            pr_handle.head_full_name,
-            pr_handle.gitref
         );
         gitremote.push(&[&refspec], Some(&mut push_options))?;
 
@@ -309,13 +300,10 @@ impl RepositoryExt for Repository {
         push_options.remote_callbacks(get_remote_callbacks(&config::CONFIG.gitlab));
 
         let refspec = format!(
-            ":refs/heads/{}{}/{}/pr-{}/{}/{}",
+            ":refs/heads/{}{}/pr-{}",
             config::CONFIG.pr_branch_prefix,
             pr_handle.base_full_name,
-            pr_handle.base_gitref,
             pr_handle.pr_number,
-            pr_handle.head_full_name,
-            pr_handle.gitref,
         );
         gitremote.push(&[&refspec], Some(&mut push_options))?;
 
