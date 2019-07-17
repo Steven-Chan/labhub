@@ -378,6 +378,7 @@ fn handle_pr_updated_with_repo(
     pr: &github::PullRequest,
 ) -> Result<String, GitError> {
     info!("handle_pr_updated_with_repo");
+    let client = reqwest::Client::new();
     let pr_handle = PrHandle::new(pr)?;
 
     info!("pr_handle={:#?}", pr_handle);
@@ -386,6 +387,8 @@ fn handle_pr_updated_with_repo(
     repo.fetch_github_remote(&pr_handle)?;
     repo.create_ref_for_pr(&pr_handle)?;
     repo.push_pr_ref(&pr_handle)?;
+
+    write_pr_update_handled_comment(&client, &pr_handle)?;
 
     Ok(String::from(":)"))
 }
@@ -435,12 +438,49 @@ fn handle_push(push: github::Push) -> Result<(), RequestErrorResult> {
     Ok(())
 }
 
+fn write_pr_update_handled_comment(
+    client: &reqwest::Client,
+    pr_handle: &PrHandle,
+) -> Result<(), GitError> {
+    let repo_full_name = &pr_handle.base_full_name;
+    let project = get_gitlab_repo_name(&repo_full_name);
+    let branch = format!("{}{}/pr-{}",
+        config::CONFIG.pr_branch_prefix,
+        pr_handle.base_full_name,
+        pr_handle.pr_number
+    );
+    write_pr_comment(&client, pr_handle, &format!(
+        "Meow! PR merged and pushed to gitlab: {}/tree/{}",
+        gitlab_client::make_ext_url(&project),
+        branch),
+    )?;
+    Ok(())
+}
+
 fn write_issue_comment(
     client: &reqwest::Client,
     ic: &github::IssueComment,
     body: &str,
 ) -> Result<(), GitError> {
     let repo_full_name = ic.repository.as_ref()?.full_name.as_ref()?;
+    write_comment(client, &repo_full_name, ic.issue.as_ref()?.number?, body)
+}
+
+fn write_pr_comment(
+    client: &reqwest::Client,
+    pr_handle: &PrHandle,
+    body: &str,
+) -> Result<(), GitError> {
+    let repo_full_name = &pr_handle.base_full_name;
+    write_comment(client, &repo_full_name, pr_handle.pr_number, body)
+}
+
+fn write_comment(
+    client: &reqwest::Client,
+    repo_full_name: &String,
+    issue_number: i64,
+    body: &str,
+) -> Result<(), GitError> {
     let repo_full_name_parts: Vec<String> = repo_full_name
         .split('/')
         .map(std::string::ToString::to_string)
@@ -454,7 +494,7 @@ fn write_issue_comment(
         client,
         &repo_full_name_parts[0],
         &repo_full_name_parts[1],
-        ic.issue.as_ref()?.number?,
+        issue_number,
         body,
     )
 }
