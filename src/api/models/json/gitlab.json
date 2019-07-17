@@ -5,5 +5,124 @@
         "ref": "new-pipeline",
         "sha": "a91957a858320c0e17f3a0eca7cfacbff50ea29a",
         "web_url": "https://example.com/foo/bar/pipelines/47"
+    },
+    "job_event": {
+      "object_kind": "job",
+      "ref": "gitlab-script-trigger",
+      "tag": false,
+      "before_sha": "2293ada6b400935a1378653304eaf6221e0fdb8f",
+      "sha": "2293ada6b400935a1378653304eaf6221e0fdb8f",
+      "job_id": 1977,
+      "job_name": "test",
+      "job_stage": "test",
+      "job_status": "created",
+      "job_started_at": null,
+      "job_finished_at": null,
+      "job_duration": null,
+      "job_allow_failure": false,
+      "job_failure_reason": "script_failure",
+      "project_id": 380,
+      "project_name": "gitlab-org/gitlab-test",
+      "user": {
+        "id": 3,
+        "name": "User",
+        "email": "user@gitlab.com"
+      },
+      "commit": {
+        "id": 2366,
+        "sha": "2293ada6b400935a1378653304eaf6221e0fdb8f",
+        "message": "test\n",
+        "author_name": "User",
+        "author_email": "user@gitlab.com",
+        "status": "created",
+        "duration": null,
+        "started_at": null,
+        "finished_at": null
+      },
+      "repository": {
+        "name": "gitlab_test",
+        "description": "Atque in sunt eos similique dolores voluptatem.",
+        "homepage": "http://192.168.64.1:3005/gitlab-org/gitlab-test",
+        "git_ssh_url": "git@192.168.64.1:gitlab-org/gitlab-test.git",
+        "git_http_url": "http://192.168.64.1:3005/gitlab-org/gitlab-test.git",
+        "visibility_level": 20
+      }
+    },
+    "pipeline_event": {
+      "object_kind": "pipeline",
+      "object_attributes": {
+        "id": 31,
+        "ref": "master",
+        "tag": false,
+        "sha": "bcbb5ec396a2c0f828686f14fac9b80b780504f2",
+        "before_sha": "bcbb5ec396a2c0f828686f14fac9b80b780504f2",
+        "status": "success",
+        "stages": [
+          "build",
+          "test",
+          "deploy"
+        ],
+        "created_at": "2016-08-12 15:23:28 UTC",
+        "finished_at": "2016-08-12 15:26:29 UTC",
+        "duration": 63,
+        "variables": [
+          {
+            "key": "NESTOR_PROD_ENVIRONMENT",
+            "value": "us-west-1"
+          }
+        ]
+      },
+      "user": {
+        "name": "Administrator",
+        "username": "root",
+        "avatar_url": "http://www.gravatar.com/avatar/e32bd13e2add097461cb96824b7a829c?s=80\u0026d=identicon"
+      },
+      "project": {
+        "id": 1,
+        "name": "Gitlab Test",
+        "description": "Atque in sunt eos similique dolores voluptatem.",
+        "web_url": "http://192.168.64.1:3005/gitlab-org/gitlab-test",
+        "avatar_url": null,
+        "git_ssh_url": "git@192.168.64.1:gitlab-org/gitlab-test.git",
+        "git_http_url": "http://192.168.64.1:3005/gitlab-org/gitlab-test.git",
+        "namespace": "Gitlab Org",
+        "visibility_level": 20,
+        "path_with_namespace": "gitlab-org/gitlab-test",
+        "default_branch": "master"
+      },
+      "commit": {
+        "id": "bcbb5ec396a2c0f828686f14fac9b80b780504f2",
+        "message": "test\n",
+        "timestamp": "2016-08-12T17:23:21+02:00",
+        "url": "http://example.com/gitlab-org/gitlab-test/commit/bcbb5ec396a2c0f828686f14fac9b80b780504f2",
+        "author": {
+          "name": "User",
+          "email": "user@gitlab.com"
+        }
+      },
+      "builds": [
+        {
+          "id": 380,
+          "stage": "deploy",
+          "name": "production",
+          "status": "skipped",
+          "created_at": "2016-08-12 15:23:28 UTC",
+          "started_at": null,
+          "finished_at": null,
+          "when": "manual",
+          "manual": true,
+          "user": {
+            "name": "Administrator",
+            "username": "root",
+            "avatar_url": "http://www.gravatar.com/avatar/e32bd13e2add097461cb96824b7a829c?s=80\u0026d=identicon"
+          },
+          "runner": {
+            "id": 380987,
+            "description": "shared-runners-manager-6.gitlab.com",
+            "active": true,
+            "is_shared": true
+          }
+        }
+      ]
     }
 }
