@@ -15,6 +15,7 @@ pub enum Feature {
     Push,
     PullRequest,
     Commands,
+    Pipeline
 }
 
 #[derive(Debug, Deserialize)]

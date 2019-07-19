@@ -1,4 +1,4 @@
-use crate::api::github_signature;
+use crate::api::{github_signature, gitlab_proto};
 use crate::commands;
 
 use rocket::request::Request;
@@ -42,6 +42,16 @@ impl From<io::Error> for RequestErrorResult {
 
 impl From<github_signature::SignatureError> for RequestErrorResult {
     fn from(error: github_signature::SignatureError) -> Self {
+        RequestErrorResult::BadRequest {
+            0: BadRequest {
+                response: content::Json(json!({ "error": format!("{:?}", error) }).to_string()),
+            },
+        }
+    }
+}
+
+impl From<gitlab_proto::GitLabTokenError> for RequestErrorResult {
+    fn from(error: gitlab_proto::GitLabTokenError) -> Self {
         RequestErrorResult::BadRequest {
             0: BadRequest {
                 response: content::Json(json!({ "error": format!("{:?}", error) }).to_string()),

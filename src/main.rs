@@ -19,6 +19,7 @@ mod commands;
 mod config;
 mod errors;
 mod github;
+mod gitlab;
 mod service;
 
 #[cfg(test)]
