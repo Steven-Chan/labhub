@@ -6,7 +6,7 @@ use crate::errors::{GitError, RequestErrorResult};
 
 use git2::build::{RepoBuilder, CheckoutBuilder};
 use git2::{FetchOptions, PushOptions, RemoteCallbacks, Repository};
-use git2::{MergeOptions, Signature, ResetType};
+use git2::{MergeOptions, Signature, ResetType, AutotagOption};
 use log::{debug, error, info, warn};
 use std::path::Path;
 use tempfile::{tempdir, TempDir};
@@ -20,14 +20,16 @@ struct RepoData {
     dir: TempDir,
 }
 
+fn has_github_repo(github_repo_full_name: &str) -> bool {
+    let hub_to_lab_lock = config::HUB_TO_LAB.lock().unwrap();
+    let hub_to_lab = &*hub_to_lab_lock;
+    hub_to_lab.contains_key(github_repo_full_name)
+}
+
 fn get_gitlab_repo_name(github_repo_full_name: &str) -> String {
     let hub_to_lab_lock = config::HUB_TO_LAB.lock().unwrap();
     let hub_to_lab = &*hub_to_lab_lock;
-    if hub_to_lab.contains_key(github_repo_full_name) {
-        hub_to_lab.get(github_repo_full_name).unwrap().to_string()
-    } else {
-        github_repo_full_name.to_string()
-    }
+    hub_to_lab.get(github_repo_full_name).unwrap().to_string()
 }
 
 fn get_remote_callbacks(site: &config::Site) -> RemoteCallbacks {
@@ -183,6 +185,7 @@ impl RepositoryExt for Repository {
 
         let mut fetch_options = FetchOptions::new();
         fetch_options.remote_callbacks(get_remote_callbacks(&config::CONFIG.github));
+        fetch_options.download_tags(AutotagOption::None);
 
         remote.fetch(
             &[&pr_handle.base_gitref, &pr_handle.gitref],
@@ -256,6 +259,8 @@ impl RepositoryExt for Repository {
             &[&base_commit, &head_commit]
         )?;
 
+        index.clear()?;
+
         info!("Successfully merged");
         Ok(())
     }
@@ -271,6 +276,7 @@ impl RepositoryExt for Repository {
         let mut gitremote = self.find_remote(&pr_handle.gitlab_remote)?;
         let mut push_options = PushOptions::new();
         push_options.remote_callbacks(get_remote_callbacks(&config::CONFIG.gitlab));
+        push_options.packbuilder_parallelism(4);
 
         let refspec = format!(
             "+refs/heads/{}{}/pr-{}:refs/heads/{}{}/pr-{}",
@@ -388,7 +394,8 @@ fn handle_pr_updated_with_repo(
     repo.create_ref_for_pr(&pr_handle)?;
     repo.push_pr_ref(&pr_handle)?;
 
-    write_pr_update_handled_comment(&client, &pr_handle)?;
+    // Too noisy, just skip it
+    // write_pr_update_handled_comment(&client, &pr_handle)?;
 
     Ok(String::from(":)"))
 }
@@ -450,7 +457,8 @@ fn write_pr_update_handled_comment(
         pr_handle.pr_number
     );
     write_pr_comment(&client, pr_handle, &format!(
-        "Meow! PR merged and pushed to gitlab: {}/tree/{}",
+        "Meow!
+PR merged and pushed to gitlab: {}/tree/{}",
         gitlab_client::make_ext_url(&project),
         branch),
     )?;
@@ -475,7 +483,7 @@ fn write_pr_comment(
     write_comment(client, &repo_full_name, pr_handle.pr_number, body)
 }
 
-fn write_comment(
+pub fn write_comment(
     client: &reqwest::Client,
     repo_full_name: &String,
     issue_number: i64,
@@ -630,8 +638,12 @@ pub fn handle_event_body(event_type: &str, body: &str) -> Result<String, Request
         "push" => {
             if config::feature_enabled(&config::Feature::Push) {
                 let push: github::Push = serde_json::from_str(body)?;
-                info!("Push ref={}", push.ref_key.as_ref()?);
-                handle_push(push)?;
+                if has_github_repo(push.repository.as_ref()?.full_name.as_ref()?) {
+                    info!("Push ref={}", push.ref_key.as_ref()?);
+                    handle_push(push)?;
+                } else {
+                    info!("Repo not listed.");
+                }
             } else {
                 info!("Push feature not enabled. Skipping event.");
             }
@@ -640,8 +652,12 @@ pub fn handle_event_body(event_type: &str, body: &str) -> Result<String, Request
         "pull_request" => {
             if config::feature_enabled(&config::Feature::PullRequest) {
                 let pr: github::PullRequest = serde_json::from_str(body)?;
-                info!("PullRequest action={}", pr.action.as_ref()?);
-                handle_pr(pr)?;
+                if has_github_repo(pr.repository.as_ref()?.full_name.as_ref()?) {
+                    info!("PullRequest action={}", pr.action.as_ref()?);
+                    handle_pr(pr)?;
+                } else {
+                    info!("Repo not listed.");
+                }
             } else {
                 info!("Pr feature not enabled. Skipping event.");
             }
@@ -650,12 +666,16 @@ pub fn handle_event_body(event_type: &str, body: &str) -> Result<String, Request
         "issue_comment" => {
             if config::feature_enabled(&config::Feature::Commands) {
                 let ic: github::IssueComment = serde_json::from_str(body)?;
-                info!(
-                    "Issue comment action={} user={}",
-                    ic.action.as_ref()?,
-                    ic.issue.as_ref()?.user.as_ref()?.login.as_ref()?
-                );
-                handle_ic(ic);
+                if has_github_repo(ic.repository.as_ref()?.full_name.as_ref()?) {
+                    info!(
+                        "Issue comment action={} user={}",
+                        ic.action.as_ref()?,
+                        ic.issue.as_ref()?.user.as_ref()?.login.as_ref()?
+                    );
+                    handle_ic(ic);
+                } else {
+                    info!("Repo not listed.");
+                }
             } else {
                 info!("Commands feature not enabled. Skipping event.");
             }
