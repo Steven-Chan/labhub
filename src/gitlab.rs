@@ -1,8 +1,8 @@
-use crate::api::models::gitlab;
-use crate::api::{gitlab_client};
+use crate::api::models::{gitlab, github};
+use crate::api::{gitlab_client, github_client};
 use crate::config;
 use crate::errors::{GitError, RequestErrorResult};
-use crate::github;
+use crate::github as github_helper;
 
 use log::{info};
 use regex::Regex;
@@ -33,7 +33,7 @@ fn handle_pipeline(pipeline_event: gitlab::PipelineEvent) -> Result<(), RequestE
             let pipeline_number = pipeline.id.as_ref()?;
             let pipeline_url = format!("{}/pipelines/{}", gitlab_client::make_ext_url(&project), pipeline_number);
             let pipeline_status = pipeline.status.as_ref()?;
-            let _result = write_pipeline_status_to_pr_comment(&client, &github_repo, pr_number, &pipeline_url, &pipeline_status);
+            let _result = write_pipeline_status_to_pr_comment(&client, &github_repo, pr_number, *pipeline_number, &pipeline_url, &pipeline_status);
             info!("PR number {} from repo {}", pr_number, github_repo)
         }
         _ => info!("Non PR triggered pipeline")
@@ -45,9 +45,22 @@ fn write_pipeline_status_to_pr_comment(
     client: &reqwest::Client,
     github_repo: &str,
     pr_number: i64,
+    pipeline_number: i64,
     pipeline_url: &str,
     pipeline_status: &str,
 ) -> Result<(), GitError> {
+    let repo_full_name_parts: Vec<String> = github_repo
+        .split('/')
+        .map(std::string::ToString::to_string)
+        .collect();
+    if repo_full_name_parts.len() != 2 {
+        return Err(GitError {
+            message: format!("Invalid repo name {}", github_repo),
+        });
+    }
+    let org = &repo_full_name_parts[0];
+    let repo = &repo_full_name_parts[1];
+
     let status: Option<String> = match pipeline_status {
         "running" => Some(format!("⏳ running")),
         "success" => Some(format!("✅ success")),
@@ -58,19 +71,53 @@ fn write_pipeline_status_to_pr_comment(
 
     match status {
         Some(status_str) => {
-            github::write_comment(
-                &client,
-                &String::from(github_repo),
-                pr_number,
-                &format!("Meow!
-Pipeline ({}) status updated:
-{}",
-                    pipeline_url, &status_str),
-            )?
+            let body = format!("Pipeline [#{}]({}) : {}", pipeline_number, pipeline_url, &status_str);
+            let last_comment = find_last_comment_by_labhub(client, org, repo, pr_number)?;
+            info!("{:?}", last_comment);
+            match last_comment {
+                Some(last_comment) => {
+                    github_client::update_issue_comment(
+                        &client,
+                        org,
+                        repo,
+                        last_comment.id.unwrap(),
+                        &format!("{}\n{}", last_comment.body.as_ref()?, body),
+                    )?
+                },
+                None => {
+                    github_helper::write_comment(
+                        &client,
+                        &String::from(github_repo),
+                        pr_number,
+                        &format!("Meow!\n{}", body),
+                    )?
+                }
+            }
         },
-        None => info!("Unhandled pipeline status: {}", pipeline_status)
+        None => {
+            info!("Unhandled pipeline status: {}", pipeline_status)
+        }
     }
     Ok(())
+}
+
+fn find_last_comment_by_labhub(
+    client: &reqwest::Client,
+    org: &str,
+    repo: &str,
+    pr_number: i64,
+) -> Result<Option<github::IssueCommentComment>, GitError> {
+    let comments = github_client::list_issue_comments(
+        &client,
+        &org,
+        &repo,
+        pr_number
+    )?;
+    let last_comment = comments
+        .into_iter()
+        .filter(|comment| Some(config::CONFIG.github.username.clone()) == comment.user.as_ref().and_then(|u| u.login.clone()))
+        .last();
+    Ok(last_comment)
 }
 
 pub fn handle_event_body(event_type: &str, body: &str) -> Result<String, RequestErrorResult> {

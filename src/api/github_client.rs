@@ -44,6 +44,20 @@ pub fn get_pull(
     Ok(res)
 }
 
+pub fn list_issue_comments(
+    client: &reqwest::Client,
+    org: &str,
+    repo: &str,
+    number: i64
+) -> Result<Vec<github::IssueCommentComment>, GitError> {
+    let res: Vec<github::IssueCommentComment> = client
+        .get(&format!("{}/issues/{}/comments", make_repo_url(org, repo), number))
+        .headers(headers(&config::CONFIG.github.api_token))
+        .send()?
+        .json()?;
+    Ok(res)
+}
+
 pub fn create_issue_comment(
     client: &reqwest::Client,
     org: &str,
@@ -65,6 +79,33 @@ pub fn create_issue_comment(
         reqwest::StatusCode::CREATED => Ok(()),
         _ => {
             let msg = format!("Error creating issue comment: res={:#?} body={}", res, body);
+            error!("{}", msg);
+            Err(GitError { message: msg })
+        }
+    }
+}
+
+pub fn update_issue_comment(
+    client: &reqwest::Client,
+    org: &str,
+    repo: &str,
+    comment_id: i64,
+    body: &str,
+) -> Result<(), GitError> {
+    let mut res = client
+        .patch(&format!(
+            "{}/issues/comments/{}",
+            make_repo_url(org, repo),
+            comment_id
+        ))
+        .headers(headers(&config::CONFIG.github.api_token))
+        .body(serde_json::json!({"body":body.to_string()}).to_string())
+        .send()?;
+    let body = res.text()?;
+    match res.status() {
+        reqwest::StatusCode::OK => Ok(()),
+        _ => {
+            let msg = format!("Error updating issue comment: res={:#?} body={}", res, body);
             error!("{}", msg);
             Err(GitError { message: msg })
         }
