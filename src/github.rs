@@ -5,7 +5,7 @@ use crate::config;
 use crate::errors::{GitError, RequestErrorResult};
 
 use git2::build::{RepoBuilder, CheckoutBuilder};
-use git2::{FetchOptions, PushOptions, RemoteCallbacks, Repository};
+use git2::{Oid, FetchOptions, PushOptions, RemoteCallbacks, Repository};
 use git2::{MergeOptions, Signature, ResetType, AutotagOption};
 use log::{debug, error, info, warn};
 use std::path::Path;
@@ -77,13 +77,15 @@ trait RepositoryExt {
 pub struct PrHandle {
     base_full_name: String,
     head_full_name: String,
-    github_remote: String,
+    github_base_remote: String,
+    github_head_remote: String,
     gitlab_remote: String,
     base_gitref: String,
     gitref: String,
     base_sha: String,
     head_sha: String,
-    github_clone_url: String,
+    github_base_clone_url: String,
+    github_head_clone_url: String,
     pr_number: i64,
 }
 
@@ -123,7 +125,7 @@ impl PrHandle {
                 .as_ref()?
                 .clone(),
             pr_number: pr.pull_request.as_ref()?.number?,
-            github_clone_url: pr
+            github_base_clone_url: pr
                 .pull_request
                 .as_ref()?
                 .head
@@ -133,7 +135,18 @@ impl PrHandle {
                 .ssh_url
                 .as_ref()?
                 .clone(),
-            github_remote: format!("github-{}", pr.pull_request.as_ref()?.number?,),
+            github_head_clone_url: pr
+                .pull_request
+                .as_ref()?
+                .head
+                .as_ref()?
+                .repo
+                .as_ref()?
+                .ssh_url
+                .as_ref()?
+                .clone(),
+            github_base_remote: format!("github-base-{}", pr.pull_request.as_ref()?.number?,),
+            github_head_remote: format!("github-head-{}", pr.pull_request.as_ref()?.number?,),
             gitlab_remote: "gitlab".to_string(),
             base_full_name: pr
                 .pull_request
@@ -162,9 +175,13 @@ impl PrHandle {
 
 impl RepositoryExt for Repository {
     fn add_remotes(&mut self, pr_handle: &PrHandle) -> Result<(), GitError> {
-        let github_refspec = format!("+refs/heads/*:refs/remotes/{}/*", pr_handle.github_remote);
-        self.remote_add_fetch(&pr_handle.github_remote, &github_refspec)?;
-        self.remote_set_url(&pr_handle.github_remote, &pr_handle.github_clone_url)?;
+        let github_base_refspec = format!("+refs/heads/*:refs/remotes/{}/*", pr_handle.github_base_remote);
+        self.remote_add_fetch(&pr_handle.github_base_remote, &github_base_refspec)?;
+        self.remote_set_url(&pr_handle.github_base_remote, &pr_handle.github_base_clone_url)?;
+
+        let github_head_refspec = format!("+refs/heads/*:refs/remotes/{}/*", pr_handle.github_head_remote);
+        self.remote_add_fetch(&pr_handle.github_head_remote, &github_head_refspec)?;
+        self.remote_set_url(&pr_handle.github_head_remote, &pr_handle.github_head_clone_url)?;
 
         let gitlab_url = format!(
             "git@gitlab.com:{}.git",
@@ -178,17 +195,25 @@ impl RepositoryExt for Repository {
 
     fn fetch_github_remote(&self, pr_handle: &PrHandle) -> Result<(), GitError> {
         info!(
-            "Fetching remote={} ref={}",
-            pr_handle.github_remote, pr_handle.gitref
+            "Fetching remote={} ref={} and remote={} ref={}",
+            pr_handle.github_base_remote, pr_handle.base_gitref,
+            pr_handle.github_head_remote, pr_handle.gitref,
         );
-        let mut remote = self.find_remote(&pr_handle.github_remote)?;
 
         let mut fetch_options = FetchOptions::new();
         fetch_options.remote_callbacks(get_remote_callbacks(&config::CONFIG.github));
         fetch_options.download_tags(AutotagOption::None);
 
-        remote.fetch(
-            &[&pr_handle.base_gitref, &pr_handle.gitref],
+        let mut base_remote = self.find_remote(&pr_handle.github_base_remote)?;
+        base_remote.fetch(
+            &[&pr_handle.base_gitref],
+            Some(&mut fetch_options),
+            None
+        )?;
+
+        let mut head_remote = self.find_remote(&pr_handle.github_head_remote)?;
+        head_remote.fetch(
+            &[&pr_handle.gitref],
             Some(&mut fetch_options),
             None
         )?;
@@ -204,25 +229,14 @@ impl RepositoryExt for Repository {
             pr_handle.base_full_name, pr_handle.base_gitref
         );
 
-        let base_refname = format!(
-            "refs/remotes/{}/{}",
-            pr_handle.github_remote, pr_handle.base_gitref
-        );
-
-        let base_commit_id = self.refname_to_id(&base_refname)?;
-        let base_commit = self.find_commit(base_commit_id)?;
+        let base_commit = self.find_commit(Oid::from_str(&pr_handle.base_sha)?)?;
 
         let mut checkout_builder = CheckoutBuilder::new();
         checkout_builder.force();
         self.reset(base_commit.as_object(), ResetType::Hard, Some(&mut checkout_builder))?;
 
-        let head_ref = self.find_reference(&format!(
-            "refs/remotes/{}/{}",
-            pr_handle.github_remote, pr_handle.gitref
-        ))?;
-        let annotated_head_commit = self.reference_to_annotated_commit(&head_ref)?;
-        let head_commit_id = annotated_head_commit.id();
-        let head_commit = self.find_commit(head_commit_id)?;
+        let annotated_head_commit = self.find_annotated_commit(Oid::from_str(&pr_handle.head_sha)?)?;
+        let head_commit = self.find_commit(Oid::from_str(&pr_handle.head_sha)?)?;
 
         let mut merge_options = MergeOptions::new();
         merge_options.fail_on_conflict(true);
