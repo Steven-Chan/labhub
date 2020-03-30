@@ -66,6 +66,12 @@ fn get_remote_callbacks(site: &config::Site) -> RemoteCallbacks {
 
 #[cfg_attr(test, mocked)]
 trait RepositoryExt {
+    fn add_remotes_for_push(&mut self, push_handle: &PushHandle) -> Result<(), GitError>;
+    fn fetch_remotes_for_push(&mut self, push_handle: &PushHandle) -> Result<(), GitError>;
+    fn check_out_ref_for_push(&self, push_handle: &PushHandle) -> Result<(), GitError>;
+    fn push_ref_for_push(&self, push_handle: &PushHandle) -> Result<(), GitError>;
+    fn delete_ref_for_push(&self, push_handle: &PushHandle) -> Result<(), GitError>;
+
     fn add_remotes(&mut self, pr_handle: &PrHandle) -> Result<(), GitError>;
     fn fetch_github_remote(&self, pr_handle: &PrHandle) -> Result<(), GitError>;
     fn create_ref_for_pr(&self, pr_handle: &PrHandle) -> Result<(), GitError>;
@@ -173,7 +179,141 @@ impl PrHandle {
     }
 }
 
+#[derive(Debug, Eq, PartialEq)]
+pub struct PushHandle {
+    full_name: String,
+    gitref: String,
+    after_sha: String,
+    forced: bool,
+    created: bool,
+    deleted: bool,
+    github_remote: String,
+    gitlab_remote: String,
+    github_clone_url: String,
+}
+
+impl PushHandle {
+    fn new(push: &github::Push) -> Result<PushHandle, std::option::NoneError> {
+        let push_handle = PushHandle {
+            full_name: push
+                .repository
+                .as_ref()?
+                .full_name
+                .as_ref()?
+                .clone(),
+            gitref: push
+                .ref_key
+                .as_ref()?
+                .clone(),
+            after_sha: push
+                .after
+                .as_ref()?
+                .clone(),
+            forced: *push.forced.as_ref()?,
+            created: *push.created.as_ref()?,
+            deleted: *push.deleted.as_ref()?,
+            github_remote: "github".to_string(),
+            gitlab_remote: "gitlab".to_string(),
+            github_clone_url: push
+                .repository
+                .as_ref()?
+                .ssh_url
+                .as_ref()?
+                .clone(),
+        };
+        Ok(push_handle)
+    }
+}
+
 impl RepositoryExt for Repository {
+    fn add_remotes_for_push(&mut self, push_handle: &PushHandle) -> Result<(), GitError> {
+        let github_refspec = format!("+refs/heads/*:refs/remotes/{}/*", push_handle.github_remote);
+        self.remote_add_fetch(&push_handle.github_remote, &github_refspec)?;
+        self.remote_set_url(&push_handle.github_remote, &push_handle.github_clone_url)?;
+
+        let gitlab_url = format!(
+            "git@gitlab.com:{}.git",
+            get_gitlab_repo_name(&push_handle.full_name)
+        );
+        let gitlab_refspec = "refs/heads/master:refs/heads/master".to_string();
+        self.remote_add_push(&push_handle.gitlab_remote, &gitlab_refspec)?;
+        self.remote_set_url(&push_handle.gitlab_remote, &gitlab_url)?;
+        Ok(())
+    }
+
+    fn fetch_remotes_for_push(&mut self, push_handle: &PushHandle) -> Result<(), GitError> {
+        info!(
+            "Fetching remote={} ref={}",
+            push_handle.github_remote, push_handle.gitref,
+        );
+
+        let mut fetch_options = FetchOptions::new();
+        fetch_options.remote_callbacks(get_remote_callbacks(&config::CONFIG.github));
+        fetch_options.download_tags(AutotagOption::None);
+
+        let mut remote = self.find_remote(&push_handle.github_remote)?;
+        remote.fetch(
+            &[&push_handle.gitref],
+            Some(&mut fetch_options),
+            None
+        )?;
+
+        info!("Successfully fetched remote");
+        Ok(())
+    }
+
+    fn check_out_ref_for_push(&self, push_handle: &PushHandle) -> Result<(), GitError> {
+        info!("Checkout ref={} after_sha={}", push_handle.gitref, push_handle.after_sha);
+        self.reference(&push_handle.gitref, Oid::from_str(&push_handle.after_sha)?, true, "")?;
+        Ok(())
+    }
+
+    fn push_ref_for_push(&self, push_handle: &PushHandle) -> Result<(), GitError> {
+        info!(
+            "Pushing remote={} ref={} full_name={}",
+            push_handle.gitlab_remote,
+            push_handle.gitref,
+            push_handle.full_name
+        );
+        let mut gitremote = self.find_remote(&push_handle.gitlab_remote)?;
+        let mut push_options = PushOptions::new();
+        push_options.remote_callbacks(get_remote_callbacks(&config::CONFIG.gitlab));
+        push_options.packbuilder_parallelism(4);
+
+        let refspec = format!(
+            "+{}:{}",
+            push_handle.gitref,
+            push_handle.gitref,
+        );
+        gitremote.push(&[&refspec], Some(&mut push_options))?;
+        info!("Successfully pushed");
+
+        Ok(())
+    }
+
+    fn delete_ref_for_push(&self, push_handle: &PushHandle) -> Result<(), GitError> {
+        info!(
+            "Pushing remote={} ref={} full_name={}",
+            push_handle.gitlab_remote,
+            push_handle.gitref,
+            push_handle.full_name
+        );
+        let mut gitremote = self.find_remote(&push_handle.gitlab_remote)?;
+        let mut push_options = PushOptions::new();
+        push_options.remote_callbacks(get_remote_callbacks(&config::CONFIG.gitlab));
+        push_options.packbuilder_parallelism(4);
+
+        // delete remote branch
+        let refspec = format!(
+            ":{}",
+            push_handle.gitref,
+        );
+        gitremote.push(&[&refspec], Some(&mut push_options))?;
+        info!("Successfully pushed (delete)");
+
+        Ok(())
+    }
+
     fn add_remotes(&mut self, pr_handle: &PrHandle) -> Result<(), GitError> {
         let github_base_refspec = format!("+refs/heads/*:refs/remotes/{}/*", pr_handle.github_base_remote);
         self.remote_add_fetch(&pr_handle.github_base_remote, &github_base_refspec)?;
@@ -448,15 +588,66 @@ fn handle_pr(pr: github::PullRequest) -> Result<(), RequestErrorResult> {
 }
 
 fn handle_push(push: github::Push) -> Result<(), RequestErrorResult> {
-    let client = reqwest::Client::new();
-    let repo_full_name = push.repository.as_ref()?.full_name.as_ref()?;
-    let project = get_gitlab_repo_name(&repo_full_name);
-    let result = gitlab_client::pull_repo_mirror(&client, &project);
+    let result = match push.deleted.as_ref()? {
+        true => handle_push_ref_deleted(&push),
+        false => handle_push_ref_updated(&push),
+    };
     match result {
-        Ok(()) => info!("Handled Push"),
+        Ok(ok) => info!("Handled Push: {}", ok),
         Err(err) => error!("Caught error handling Push: {:?}", err),
     }
+
     Ok(())
+}
+
+fn handle_push_ref_updated(push: &github::Push) -> Result<String, GitError> {
+    info!("Handling push update");
+    let url = push.repository.as_ref()?.ssh_url.as_ref()?;
+    let mut repo_data = clone_repo(url)?;
+
+    let result = handle_push_ref_updated_with_repo(&mut repo_data.repo, push);
+    repo_data.dir.close()?;
+    result
+}
+
+fn handle_push_ref_updated_with_repo(
+    repo: &mut dyn RepositoryExt,
+    push: &github::Push
+) -> Result<String, GitError> {
+    info!("handle_push_with_repo");
+    let client = reqwest::Client::new();
+    let push_handle = PushHandle::new(push)?;
+
+    repo.add_remotes_for_push(&push_handle)?;
+    repo.fetch_remotes_for_push(&push_handle)?;
+    repo.check_out_ref_for_push(&push_handle)?;
+    repo.push_ref_for_push(&push_handle)?;
+
+    Ok(String::from(":)"))
+}
+
+fn handle_push_ref_deleted(push: &github::Push) -> Result<String, GitError> {
+    info!("Handling push delete");
+    let url = push.repository.as_ref()?.ssh_url.as_ref()?;
+    let mut repo_data = clone_repo(url)?;
+
+    let result = handle_push_ref_deleted_with_repo(&mut repo_data.repo, push);
+    repo_data.dir.close()?;
+    result
+}
+
+fn handle_push_ref_deleted_with_repo(
+    repo: &mut dyn RepositoryExt,
+    push: &github::Push
+) -> Result<String, GitError> {
+    info!("handle_push_with_repo");
+    let client = reqwest::Client::new();
+    let push_handle = PushHandle::new(push)?;
+
+    repo.add_remotes_for_push(&push_handle)?;
+    repo.delete_ref_for_push(&push_handle)?;
+
+    Ok(String::from(":)"))
 }
 
 fn write_pr_update_handled_comment(
